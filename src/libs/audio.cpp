@@ -10,12 +10,14 @@
 #include "kernel/pthread.h"
 #include "kernel/semaphore.h"
 #include "libs/audio_internal.h"
+#include "libs/controller.h"
 #include "libs/errno.h"
 #include "libs/libs.h"
 
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -394,7 +396,35 @@ const void* Audio::PrepareOutputBuffer(const PortOut& port, const void* data,
 bool Audio::QueueSdlAudio(PortOut* port, const void* data, bool blocking) {
 	EXIT_IF(port == nullptr);
 
-	if (port->audio_device == 0 || data == nullptr) {
+	if (data == nullptr) {
+		return false;
+	}
+
+	if (port->type == AUDIO_OUT_PORT_TYPE_VIBRATION) {
+		float peak[2] = {0.0f, 0.0f};
+		for (uint32_t frame = 0; frame < port->samples_num; frame++) {
+			for (int ch = 0; ch < 2; ch++) {
+				const int src_ch = port->channels_num == 1 ? 0 : ch;
+				float value      = 0.0f;
+				if (FormatIsFloat(port->format)) {
+					value = static_cast<const float*>(data)[frame * port->channels_num + src_ch];
+				} else {
+					value = static_cast<const int16_t*>(data)[frame * port->channels_num + src_ch] /
+					        32768.0f;
+				}
+				value *= static_cast<float>(port->volume[src_ch]) / 32768.0f;
+				peak[ch] = std::max(peak[ch], std::fabs(value));
+			}
+		}
+
+		const auto to_motor = [](float value) {
+			return static_cast<uint8_t>(std::clamp(value * 2.0f, 0.0f, 1.0f) * 255.0f);
+		};
+		Controller::SetHostVibration(to_motor(peak[0]), to_motor(peak[1]));
+		return true;
+	}
+
+	if (port->audio_device == 0) {
 		return false;
 	}
 

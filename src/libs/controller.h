@@ -70,6 +70,7 @@ void SetAxis(int id, Axis axis, int value);
 void SetRightStick(int id, int x, int y);
 void SetTouchPad(int id, int finger, bool down, float x, float y);
 void ResetInputState();
+void SetHostVibration(uint8_t large_motor, uint8_t small_motor);
 
 int KYTY_SYSV_ABI PadInit();
 int KYTY_SYSV_ABI PadOpen(int user_id, int type, int index, const void* param);
