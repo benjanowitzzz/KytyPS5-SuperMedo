@@ -37,14 +37,21 @@ constexpr int AUDIO_OUT_PORT_TYPE_PERSONAL  = 3;
 constexpr int AUDIO_OUT_PORT_TYPE_PADSPK    = 4;
 constexpr int AUDIO_OUT_PORT_TYPE_VIBRATION = 10;
 constexpr int AUDIO_OUT_PORT_TYPE_AUDIO3D   = 126;
-constexpr int        = 127;
+constexpr int AUDIO_OUT_PORT_TYPE_AUX       = 127;
+
+// PS5 haptics arrive as an audio stream, often in blocks only a few milliseconds long. Forwarding
+// every block to SDL overwhelms some virtual controllers (notably Steam Input/Parsec) and can make
+// rumble stop until the controller is reconnected. Preserve the strongest sample in each window and
+// send a conventional rumble update at a controller-friendly rate instead.
+constexpr uint64_t VIBRATION_UPDATE_INTERVAL_US = 50000;
+constexpr uint8_t  VIBRATION_NOISE_FLOOR        = 3;
 
 constexpr uint32_t AUDIO_OUT_PARAM_FORMAT_MASK = 0x000000ffu;
 
 static bool audio_out_port_type_is_valid(int type) {
 	return (type >= AUDIO_OUT_PORT_TYPE_MAIN && type <= AUDIO_OUT_PORT_TYPE_PADSPK) ||
 	       type == AUDIO_OUT_PORT_TYPE_VIBRATION || type == AUDIO_OUT_PORT_TYPE_AUDIO3D ||
-	       type == ;
+	       type == AUDIO_OUT_PORT_TYPE_AUX;
 }
 
 } // namespace
@@ -106,9 +113,12 @@ private:
 		uint32_t samples_num      = 0;
 		uint32_t freq             = 0;
 		Format   format           = Format::Unknown;
-		uint64_t last_output_time = 0;
-		int      channels_num     = 0;
-		int      volume[12]       = {};
+		uint64_t last_output_time      = 0;
+		uint64_t last_vibration_update = 0;
+		int      channels_num          = 0;
+		int      volume[12]            = {};
+		uint8_t  pending_vibration[2]   = {};
+		bool     vibration_active       = false;
 
 		SDL_AudioDeviceID audio_device = 0;
 		SDL_AudioSpec     audio_spec   = {};
@@ -418,9 +428,33 @@ bool Audio::QueueSdlAudio(PortOut* port, const void* data, bool blocking) {
 		}
 
 		const auto to_motor = [](float value) {
-			return static_cast<uint8_t>(std::clamp(value * 2.0f, 0.0f, 1.0f) * 255.0f);
+			const auto motor =
+			    static_cast<uint8_t>(std::clamp(value * 2.0f, 0.0f, 1.0f) * 255.0f);
+			return motor <= VIBRATION_NOISE_FLOOR ? static_cast<uint8_t>(0) : motor;
 		};
-		Controller::SetHostVibration(to_motor(peak[0]), to_motor(peak[1]));
+
+		for (int ch = 0; ch < 2; ch++) {
+			port->pending_vibration[ch] =
+			    std::max(port->pending_vibration[ch], to_motor(peak[ch]));
+		}
+
+		const auto now = LibKernel::KernelGetProcessTime();
+		if (port->last_vibration_update != 0 &&
+		    now - port->last_vibration_update < VIBRATION_UPDATE_INTERVAL_US) {
+			return true;
+		}
+
+		const auto large_motor          = port->pending_vibration[0];
+		const auto small_motor          = port->pending_vibration[1];
+		port->pending_vibration[0]      = 0;
+		port->pending_vibration[1]      = 0;
+		port->last_vibration_update     = now;
+
+		const bool vibration_active = large_motor != 0 || small_motor != 0;
+		if (vibration_active || port->vibration_active) {
+			Controller::SetHostVibration(large_motor, small_motor);
+		}
+		port->vibration_active = vibration_active;
 		return true;
 	}
 
@@ -829,7 +863,7 @@ int KYTY_SYSV_ABI AudioOutGetPortState(int handle, AudioOutPortState* state) {
 			state->output  = 4;
 			state->channel = 1;
 			break;
-		case :
+		case AUDIO_OUT_PORT_TYPE_AUX:
 			state->output  = 0x80;
 			state->channel = 0;
 			break;
