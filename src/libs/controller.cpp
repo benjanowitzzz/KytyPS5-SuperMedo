@@ -590,7 +590,9 @@ void ResetInputState() {
 
 void SetHostVibration(uint8_t large_motor, uint8_t small_motor) {
 	if (g_controller != nullptr) {
-		g_controller->SetVibration(large_motor, small_motor, 100);
+		// Longer than the 50 ms haptic update window, so scheduling jitter cannot create gaps.
+		// A zero-amplitude update still stops both motors immediately.
+		g_controller->SetVibration(large_motor, small_motor, 200);
 	}
 }
 
