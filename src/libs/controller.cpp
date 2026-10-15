@@ -104,7 +104,7 @@ public:
 	void ResetInputState();
 	void ReleaseHostPads();
 	void GetConnectionInfo(bool* flag, int* count);
-	void SetVibration(uint8_t large_motor, uint8_t small_motor);
+	void SetVibration(uint8_t large_motor, uint8_t small_motor, uint32_t duration_ms);
 	void SetLightBar(uint8_t r, uint8_t g, uint8_t b);
 	bool SetTriggerEffect(const PadTriggerEffectParam& param);
 	void ReadState(ControllerState* state, bool* flag, int* count);
@@ -449,7 +449,7 @@ void GameController::ReleaseHostPads() {
 	m_connected_ids.clear();
 }
 
-void GameController::SetVibration(uint8_t large_motor, uint8_t small_motor) {
+void GameController::SetVibration(uint8_t large_motor, uint8_t small_motor, uint32_t duration_ms) {
 	Common::LockGuard lock(m_mutex);
 
 	if (m_active_id == HOST_INPUT_CONTROLLER_ID) {
@@ -463,7 +463,7 @@ void GameController::SetVibration(uint8_t large_motor, uint8_t small_motor) {
 
 	const auto large = static_cast<uint16_t>(large_motor * 0x101U);
 	const auto small = static_cast<uint16_t>(small_motor * 0x101U);
-	if (SDL_GameControllerRumble(pad, large, small, RUMBLE_DURATION_MS) != 0) {
+	if (SDL_GameControllerRumble(pad, large, small, duration_ms) != 0) {
 		LOGF("\t rumble failed: %s\n", SDL_GetError());
 	}
 }
@@ -586,6 +586,14 @@ void SetTouchPad(int id, int finger, bool down, float x, float y) {
 
 void ResetInputState() {
 	g_controller->ResetInputState();
+}
+
+void SetHostVibration(uint8_t large_motor, uint8_t small_motor) {
+	if (g_controller != nullptr) {
+		// Longer than the 50 ms haptic update window, so scheduling jitter cannot create gaps.
+		// A zero-amplitude update still stops both motors immediately.
+		g_controller->SetVibration(large_motor, small_motor, 200);
+	}
 }
 
 int KYTY_SYSV_ABI PadInit() {
@@ -774,7 +782,7 @@ int KYTY_SYSV_ABI PadSetVibration(int handle, const PadVibrationParam* param) {
 	     "\t small_motor = %d\n",
 	     static_cast<int>(param->large_motor), static_cast<int>(param->small_motor));
 
-	g_controller->SetVibration(param->large_motor, param->small_motor);
+	g_controller->SetVibration(param->large_motor, param->small_motor, RUMBLE_DURATION_MS);
 
 	return OK;
 }

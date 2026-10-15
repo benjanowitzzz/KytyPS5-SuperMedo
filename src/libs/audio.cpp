@@ -10,12 +10,14 @@
 #include "kernel/pthread.h"
 #include "kernel/semaphore.h"
 #include "libs/audio_internal.h"
+#include "libs/controller.h"
 #include "libs/errno.h"
 #include "libs/libs.h"
 
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -36,6 +38,13 @@ constexpr int AUDIO_OUT_PORT_TYPE_PADSPK    = 4;
 constexpr int AUDIO_OUT_PORT_TYPE_VIBRATION = 10;
 constexpr int AUDIO_OUT_PORT_TYPE_AUDIO3D   = 126;
 constexpr int AUDIO_OUT_PORT_TYPE_AUX       = 127;
+
+// PS5 haptics arrive as an audio stream, often in blocks only a few milliseconds long. Forwarding
+// every block to SDL overwhelms some virtual controllers (notably Steam Input/Parsec) and can make
+// rumble stop until the controller is reconnected. Preserve the strongest sample in each window and
+// send a conventional rumble update at a controller-friendly rate instead.
+constexpr uint64_t VIBRATION_UPDATE_INTERVAL_US = 50000;
+constexpr uint8_t  VIBRATION_NOISE_FLOOR        = 3;
 
 constexpr uint32_t AUDIO_OUT_PARAM_FORMAT_MASK = 0x000000ffu;
 
@@ -104,9 +113,12 @@ private:
 		uint32_t samples_num      = 0;
 		uint32_t freq             = 0;
 		Format   format           = Format::Unknown;
-		uint64_t last_output_time = 0;
-		int      channels_num     = 0;
-		int      volume[12]       = {};
+		uint64_t last_output_time      = 0;
+		uint64_t last_vibration_update = 0;
+		int      channels_num          = 0;
+		int      volume[12]            = {};
+		uint8_t  pending_vibration[2]   = {};
+		bool     vibration_active       = false;
 
 		SDL_AudioDeviceID audio_device = 0;
 		SDL_AudioSpec     audio_spec   = {};
@@ -394,7 +406,59 @@ const void* Audio::PrepareOutputBuffer(const PortOut& port, const void* data,
 bool Audio::QueueSdlAudio(PortOut* port, const void* data, bool blocking) {
 	EXIT_IF(port == nullptr);
 
-	if (port->audio_device == 0 || data == nullptr) {
+	if (data == nullptr) {
+		return false;
+	}
+
+	if (port->type == AUDIO_OUT_PORT_TYPE_VIBRATION) {
+		float peak[2] = {0.0f, 0.0f};
+		for (uint32_t frame = 0; frame < port->samples_num; frame++) {
+			for (int ch = 0; ch < 2; ch++) {
+				const int src_ch = port->channels_num == 1 ? 0 : ch;
+				float value      = 0.0f;
+				if (FormatIsFloat(port->format)) {
+					value = static_cast<const float*>(data)[frame * port->channels_num + src_ch];
+				} else {
+					value = static_cast<const int16_t*>(data)[frame * port->channels_num + src_ch] /
+					        32768.0f;
+				}
+				value *= static_cast<float>(port->volume[src_ch]) / 32768.0f;
+				peak[ch] = std::max(peak[ch], std::fabs(value));
+			}
+		}
+
+		const auto to_motor = [](float value) {
+			const auto motor =
+			    static_cast<uint8_t>(std::clamp(value * 2.0f, 0.0f, 1.0f) * 255.0f);
+			return motor <= VIBRATION_NOISE_FLOOR ? static_cast<uint8_t>(0) : motor;
+		};
+
+		for (int ch = 0; ch < 2; ch++) {
+			port->pending_vibration[ch] =
+			    std::max(port->pending_vibration[ch], to_motor(peak[ch]));
+		}
+
+		const auto now = LibKernel::KernelGetProcessTime();
+		if (port->last_vibration_update != 0 &&
+		    now - port->last_vibration_update < VIBRATION_UPDATE_INTERVAL_US) {
+			return true;
+		}
+
+		const auto large_motor          = port->pending_vibration[0];
+		const auto small_motor          = port->pending_vibration[1];
+		port->pending_vibration[0]      = 0;
+		port->pending_vibration[1]      = 0;
+		port->last_vibration_update     = now;
+
+		const bool vibration_active = large_motor != 0 || small_motor != 0;
+		if (vibration_active || port->vibration_active) {
+			Controller::SetHostVibration(large_motor, small_motor);
+		}
+		port->vibration_active = vibration_active;
+		return true;
+	}
+
+	if (port->audio_device == 0) {
 		return false;
 	}
 
