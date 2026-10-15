@@ -27,7 +27,7 @@ jobs:
           $patchUrl = "https://raw.githubusercontent.com/${{ github.repository }}/${{ github.sha }}/0001-Rumble-only-on-upstream-7223f1c7.patch"
           Invoke-WebRequest -UseBasicParsing $patchUrl -OutFile rumble.patch
           $hash = (Get-FileHash rumble.patch -Algorithm SHA256).Hash.ToLowerInvariant()
-          if ($hash -ne '89071573cf5a74260eb608e7ea87a3e612297b72d7e1df385f870914a5105bfd') { throw "Unexpected patch hash: $hash" }
+          if ($hash -ne 'b200c91723eb71075392f579d185d9e6818f407a3cd5f78b7c1b10379350d20c') { throw "Unexpected patch hash: $hash" }
           git apply --check rumble.patch
           git apply rumble.patch
           $changed = @(git diff --name-only)
