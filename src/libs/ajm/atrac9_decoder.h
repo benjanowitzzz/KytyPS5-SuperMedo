@@ -312,17 +312,19 @@ private:
 	}
 
 	int DecodeFrame(const uint8_t* input, int* bytes_used) {
+		const auto input_size = static_cast<int>(m_superframe_bytes_remain);
 		switch (m_sample_encoding) {
 			case AjmSampleEncoding::S16:
-				return Atrac9Decode(m_handle, input,
+				return Atrac9Decode(m_handle, input, input_size,
 				                    reinterpret_cast<int16_t*>(m_pcm_buffer.data()), bytes_used, 0);
 			case AjmSampleEncoding::S32:
-				return Atrac9DecodeS32(m_handle, input,
+				return Atrac9DecodeS32(m_handle, input, input_size,
 				                       reinterpret_cast<int32_t*>(m_pcm_buffer.data()), bytes_used,
 				                       0);
 			case AjmSampleEncoding::Float:
 				return Atrac9DecodeF32(
-				    m_handle, input, reinterpret_cast<float*>(m_pcm_buffer.data()), bytes_used, 0);
+				    m_handle, input, input_size, reinterpret_cast<float*>(m_pcm_buffer.data()),
+				    bytes_used, 0);
 			default:
 				EXIT("unsupported AJM PCM sample encoding %u\n",
 				     static_cast<uint32_t>(m_sample_encoding));
