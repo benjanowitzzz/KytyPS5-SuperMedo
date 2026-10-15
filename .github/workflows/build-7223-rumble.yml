@@ -1,0 +1,94 @@
+name: Build exact 7223f1c7 with Xbox rumble
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    name: Build clean Windows x64 executable
+    runs-on: windows-2022
+    steps:
+      - name: Checkout exact upstream revision
+        uses: actions/checkout@v4
+        with:
+          repository: KytyPS5/KytyPS5
+          ref: 7223f1c7d45f6431b253996a9d0981bfac1ec291
+          submodules: recursive
+
+      - name: Verify and patch exact base
+        shell: pwsh
+        run: |
+          $expectedBase = '7223f1c7d45f6431b253996a9d0981bfac1ec291'
+          $actualBase = git rev-parse HEAD
+          if ($actualBase -ne $expectedBase) { throw "Unexpected base revision: $actualBase" }
+          $patchUrl = "https://raw.githubusercontent.com/${{ github.repository }}/${{ github.sha }}/0001-Rumble-only-on-upstream-7223f1c7.patch"
+          Invoke-WebRequest -UseBasicParsing $patchUrl -OutFile rumble.patch
+          $hash = (Get-FileHash rumble.patch -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($hash -ne '89071573cf5a74260eb608e7ea87a3e612297b72d7e1df385f870914a5105bfd') { throw "Unexpected patch hash: $hash" }
+          git apply --check rumble.patch
+          git apply rumble.patch
+          $changed = @(git diff --name-only)
+          $expected = @('src/libs/audio.cpp','src/libs/controller.cpp','src/libs/controller.h')
+          if (Compare-Object $changed $expected) { throw "Unexpected changed files: $($changed -join ', ')" }
+          git diff --check
+          git diff --stat
+
+      - name: Install LLVM 19.1.7
+        shell: pwsh
+        run: choco upgrade llvm --version=19.1.7 --allow-downgrade --no-progress -y
+
+      - name: Locate vcpkg
+        id: vcpkg
+        shell: pwsh
+        run: |
+          $root = Split-Path (Get-Command vcpkg).Source
+          $hash = (Get-FileHash "$root\ports\glslang\vcpkg.json" -Algorithm SHA256).Hash.ToLowerInvariant()
+          "root=$root" >> $env:GITHUB_OUTPUT
+          "port_hash=$hash" >> $env:GITHUB_OUTPUT
+
+      - name: Cache glslang
+        id: glslang
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.vcpkg.outputs.root }}\installed\x64-windows
+          key: glslang-${{ runner.os }}-${{ steps.vcpkg.outputs.port_hash }}-tools-opt
+
+      - name: Install glslang
+        shell: pwsh
+        run: |
+          if ('${{ steps.glslang.outputs.cache-hit }}' -ne 'true') { vcpkg install 'glslang[tools,opt]:x64-windows' }
+          "${{ steps.vcpkg.outputs.root }}\installed\x64-windows\tools\glslang" >> $env:GITHUB_PATH
+
+      - name: Build emulator
+        shell: cmd
+        env:
+          KYTY_CMAKE_ARGS: -DKYTY_MARCH=x86-64-v3
+        run: |
+          call build-windows.cmd kyty_emulator > build.log 2>&1 || (type build.log & exit /b 1)
+          type build.log
+
+      - name: Show compiler errors
+        if: failure()
+        shell: pwsh
+        run: |
+          if (Test-Path build.log) { Select-String -Path build.log -Pattern 'error' | Select-Object -First 20 | ForEach-Object { Write-Output "::error::$($_.Line)" } }
+
+      - name: Package clean drop-in executable
+        shell: pwsh
+        run: |
+          $out = '_Build\package\KytyPS5-7223f1c7-rumble-clean'
+          New-Item -ItemType Directory -Force $out | Out-Null
+          Copy-Item '_Build\windows\kyty_emulator.exe' $out
+          Get-ChildItem '_Build\windows\kyty_emulator_*.map' -ErrorAction SilentlyContinue | Select-Object -First 1 | ForEach-Object { Copy-Item $_.FullName "$out\kyty_emulator.map" }
+          @('Base: KytyPS5/KytyPS5 7223f1c7d45f6431b253996a9d0981bfac1ec291','Changes: src/libs/audio.cpp, src/libs/controller.cpp, src/libs/controller.h','Purpose: convert PS5 haptic audio to conventional SDL controller rumble.','Install: close the emulator, back up the original kyty_emulator.exe, then replace only that file.') | Set-Content "$out\BUILD-INFO.txt" -Encoding UTF8
+          Get-FileHash "$out\kyty_emulator.exe" -Algorithm SHA256 | Format-List | Out-File "$out\SHA256.txt" -Encoding ASCII
+
+      - name: Upload clean build
+        uses: actions/upload-artifact@v4
+        with:
+          name: KytyPS5-7223f1c7-rumble-clean
+          path: _Build/package/KytyPS5-7223f1c7-rumble-clean/
+          if-no-files-found: error
