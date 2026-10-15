@@ -37,14 +37,14 @@ constexpr int AUDIO_OUT_PORT_TYPE_PERSONAL  = 3;
 constexpr int AUDIO_OUT_PORT_TYPE_PADSPK    = 4;
 constexpr int AUDIO_OUT_PORT_TYPE_VIBRATION = 10;
 constexpr int AUDIO_OUT_PORT_TYPE_AUDIO3D   = 126;
-constexpr int AUDIO_OUT_PORT_TYPE_AUX       = 127;
+constexpr int        = 127;
 
 constexpr uint32_t AUDIO_OUT_PARAM_FORMAT_MASK = 0x000000ffu;
 
 static bool audio_out_port_type_is_valid(int type) {
 	return (type >= AUDIO_OUT_PORT_TYPE_MAIN && type <= AUDIO_OUT_PORT_TYPE_PADSPK) ||
 	       type == AUDIO_OUT_PORT_TYPE_VIBRATION || type == AUDIO_OUT_PORT_TYPE_AUDIO3D ||
-	       type == AUDIO_OUT_PORT_TYPE_AUX;
+	       type == ;
 }
 
 } // namespace
@@ -829,7 +829,7 @@ int KYTY_SYSV_ABI AudioOutGetPortState(int handle, AudioOutPortState* state) {
 			state->output  = 4;
 			state->channel = 1;
 			break;
-		case AUDIO_OUT_PORT_TYPE_AUX:
+		case :
 			state->output  = 0x80;
 			state->channel = 0;
 			break;
